@@ -1,0 +1,6 @@
+{"event":"phase","name":"alloc_load","ms":0.740,"bytes":0}
+{"event":"meta","kernel":"GEMV","dpus":4,"tasklets":16,"n":4194304,"ops":8388608}
+{"event":"phase","name":"copy_in","ms":2.200,"bytes":16793600}
+{"event":"phase","name":"launch","ms":1447.643,"bytes":0}
+{"event":"phase","name":"copy_out","ms":0.147,"bytes":16384}
+{"event":"dpu","cycles":27362256,"dpus":4}

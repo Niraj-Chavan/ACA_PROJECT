@@ -44,6 +44,7 @@ export type Action =
   | { type: 'patch'; section: 'cpu' | 'pim' | 'energy'; key: string; value: number }
   | { type: 'patchDataResident'; value: boolean }
   | { type: 'patchResultOnHost'; value: boolean }
+  | { type: 'patchParams'; params: Params }
   | { type: 'reset' }
   | { type: 'saveRun'; name: string }
   | { type: 'deleteRun'; id: string }
@@ -88,6 +89,8 @@ export function reducer(state: AppState, action: Action): AppState {
       return derive({ ...state, params: { ...state.params, dataResident: action.value } })
     case 'patchResultOnHost':
       return derive({ ...state, params: { ...state.params, resultNeededOnHost: action.value } })
+    case 'patchParams':
+      return derive({ ...state, params: JSON.parse(JSON.stringify(action.params)) as Params })
     case 'reset':
       return { ...initialState(), runs: state.runs }
     case 'saveRun': {

@@ -21,5 +21,15 @@ export function cpuModel(c: CPUParams, t: WorkTotals) {
   // cache-line granularity (64 B) for the access count
   const accesses = bytes / 64 + t.randomAccesses
 
-  return { time, memTime, computeTime, bytes, accesses, bound }
+  return {
+    time,
+    memTime,
+    computeTime,
+    streamSeconds,
+    randomSeconds,
+    peakOps,
+    bytes,
+    accesses,
+    bound,
+  }
 }

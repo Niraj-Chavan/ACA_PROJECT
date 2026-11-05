@@ -1,3 +1,15 @@
+# JavaScript / build outputs
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Native kernel builds (rebuilt with `make`)
+build/
+pim-kernels/build/
+
+# Local run scratch (demo run streams in pim-kernels/runs/ are kept)
+pim-kernels/events.jsonl
+*.log
+
+# Browser tooling artifacts
+.playwright-mcp/

@@ -420,7 +420,7 @@ export function Lab() {
                   {m && (
                     <p className="fineprint measured-line">
                       measured anchor: {m.dpus} DPUs · {m.cycles.toLocaleString()} cycles ·{' '}
-                      {fmtTime(m.kernelS)}
+                      {fmtTime(m.kernelS)} · {fmtCount(m.n)} elements
                     </p>
                   )}
                   {run && (
@@ -496,8 +496,8 @@ export function Lab() {
                     <th>Kernel</th>
                     <th>Kind</th>
                     <th>Selected</th>
-                    <th>Measured anchor</th>
-                    <th>Modelled PIM time</th>
+                    <th>Measured anchor (real run)</th>
+                    <th>Modelled PIM time @ 1M</th>
                     <th>Modelled placement</th>
                   </tr>
                 </thead>
@@ -532,6 +532,11 @@ export function Lab() {
                 </tbody>
               </table>
             </div>
+            <p className="fineprint">
+              The modelled column is the Simulator's 1M-element workload at the selected DPU
+              count; the measured anchor is the saved real run, which used 1M elements per DPU
+              (about 4.2M total). Compare shapes and placements, not the absolute times.
+            </p>
 
             {measuredBatch.length > 0 && (
               <>

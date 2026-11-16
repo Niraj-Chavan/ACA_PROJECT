@@ -23,6 +23,26 @@ export function Simulator() {
 
   return (
     <div className="page">
+      <div className={`resident-badge ${state.params.dataResident ? 'resident' : 'cold'}`}>
+        <div>
+          <strong>
+            {state.params.dataResident
+              ? 'PIM copy-in is 0 B by assumption: the data is already resident in PIM banks.'
+              : 'Cold data: every PIM run pays copy-in on the host ↔ PIM link.'}
+          </strong>
+          <span>
+            {state.params.dataResident
+              ? ' This is the mockup preset’s resident-data assumption, not a missing transfer. Toggle it to see the cold-data case and the break-even point.'
+              : ' This is the honest streaming case. Toggle back to the resident-data assumption used by the Phase 1 worked example.'}
+          </span>
+        </div>
+        <button
+          className="btn small"
+          onClick={() => dispatch({ type: 'patchDataResident', value: !state.params.dataResident })}
+        >
+          {state.params.dataResident ? 'Charge copy-in (cold data)' : 'Assume resident data'}
+        </button>
+      </div>
       <div className="sim-grid">
         <ControlsPanel dataBytes={state.dataBytes} />
 

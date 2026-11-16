@@ -39,9 +39,16 @@ The project answers that question in two independent ways:
   - [Presets and workloads](#presets-and-workloads)
 - [Real UPMEM DPU execution](#real-upmem-dpu-execution)
   - [The machine](#the-machine)
-  - [The three kernels](#the-three-kernels)
+  - [The six kernels](#the-six-kernels)
   - [Measured results](#measured-results)
   - [Calibration ledger](#calibration-ledger)
+- [Scheduler and Algorithm Lab](#scheduler-and-algorithm-lab)
+  - [Adaptive CPU ⇄ PIM scheduling](#adaptive-cpu--pim-scheduling)
+  - [Load balancing](#load-balancing)
+  - [Logical bank allocator](#logical-bank-allocator)
+  - [Algorithm Lab: sequential vs parallel](#algorithm-lab-sequential-vs-parallel)
+  - [Optimisation](#optimisation)
+  - [Measured vs modelled](#measured-vs-modelled)
 - [Dashboard pages](#dashboard-pages)
 - [Repository layout](#repository-layout)
 - [Setup and build details](#setup-and-build-details)
@@ -60,9 +67,12 @@ The project answers that question in two independent ways:
 | **CPU vs PIM simulator** | Time, energy, data movement, bandwidth utilisation and speedup for eight workloads, with editable CPU/PIM/energy parameters |
 | **Honest cost model** | Includes copy-in, host merge, copy-out, launch, sync, load imbalance and the slow PIM integer multiply — the costs marketing slides omit |
 | **Formula inspector** | Symbolic formula → substituted numbers → plain-language explanation for every term, with the critical path marked |
-| **Real DPU execution** | Vector add, GEMV and reduction compiled to the UPMEM DPU ISA and executed by the SDK runtime |
+| **Real DPU execution** | Vector add, GEMV, reduction, parallel search, histogram and matrix multiply compiled to the UPMEM DPU ISA and executed by the SDK runtime |
 | **Calibration** | Measured DPU cycles and transfer times are compared with the model; one click applies measured constants |
 | **Live dashboard** | Build and run a kernel from the browser, stream phases over SSE, or replay a saved run offline |
+| **Adaptive scheduler** | CPU/PIM placement across five policies with Gantt timelines, per-task reasons, energy and modelled bank conflicts |
+| **Load balancing & memory** | Lane-utilisation comparison plus a logical bank allocator (First Fit / Best Fit / Bank-aware) with conflict and fragmentation analysis |
+| **Algorithm Lab** | Six real kernels, sequential vs parallel composition, DPU scaling and a workload-partitioning optimiser |
 | **PIM Suitability Score** | 0–100 score from four model-derived factors, fitted and validated over ~500 random configurations |
 | **Optimiser** | Searches banks × units × frequency under a power budget and reports a Pareto front |
 | **Experiments** | Ten guided sweeps (E1–E10) with charts, CSV export and written observations |
@@ -85,7 +95,7 @@ Production build:
 ```bash
 npm run build        # dist/
 npm run preview
-npm test             # 23 engine + trace tests
+npm test             # 31 engine, trace and scheduler/memory tests
 ```
 
 ### 2. Real DPU kernels (UPMEM SDK required)
@@ -94,9 +104,12 @@ npm test             # 23 engine + trace tests
 source ../upmem-env.sh          # from the project root; adjusts PATH/LD_LIBRARY_PATH
 cd pim-kernels
 
-make va   NR_DPUS=4 && ./build/va_host
-make gemv NR_DPUS=4 && ./build/gemv_host
-make red  NR_DPUS=4 && ./build/red_host
+make va     NR_DPUS=4 && ./build/va_host
+make gemv   NR_DPUS=4 && ./build/gemv_host
+make red    NR_DPUS=4 && ./build/red_host
+make search NR_DPUS=4 && ./build/search_host
+make hist   NR_DPUS=4 && ./build/hist_host
+make gemm   NR_DPUS=4 && ./build/gemm_host
 ```
 
 See [`pim-kernels/README.md`](pim-kernels/README.md) for SDK setup, the event
@@ -115,7 +128,7 @@ npm run dev
 ```
 
 Open **Live DPU** → pick a kernel and DPU count → **Build & run on DPUs**. The
-three bundled demo runs work even with the bridge stopped.
+six bundled demo runs work even with the bridge stopped.
 
 > **No UPMEM board is attached.** Kernels run in the UPMEM SDK **functional
 > simulator**, which executes the compiled DPU binary instruction by
@@ -131,14 +144,17 @@ three bundled demo runs work even with the bridge stopped.
 ```mermaid
 flowchart LR
     subgraph Browser["Browser — React + TypeScript"]
-        UI["Simulator · Experiments · Results\nPIM internals · Live DPU"]
+        UI["Simulator · Scheduler · Algorithm Lab\nExperiments · Results · PIM internals · Live DPU"]
         Store["Store\nparams · workload · n"]
         Engine["Analytical engine\ncpuModel · pimModel · energy\nsimulate · trace · calibration"]
+        Sched["Scheduler engine\ntasks · scheduler · memory\nbenchmark · optimize"]
         Reducer["Run reducer\nmeta · phase · dpu · done"]
 
         UI --> Store
         Store --> Engine
+        Store --> Sched
         Engine --> UI
+        Sched --> UI
         Reducer --> UI
     end
 
@@ -417,13 +433,16 @@ Key properties that the model captures:
 - **16 hardware tasklets per DPU** share the 64 KiB WRAM; barriers are explicit.
 - **256-byte DMA bursts** (8-byte alignment minimum).
 
-### The three kernels
+### The six kernels
 
 | Kernel | Source | Strategy | What it proves |
 |---|---|---|---|
 | **VA** `C = A + B` | `pim-kernels/va/` | Each tasklet streams 256 B blocks of A and B, adds, writes C back | Pure streaming: measured time is transfer-shaped, no partials or merge |
 | **GEMV** `y = A·x` | `pim-kernels/gemv/` | Matrix rows stay in MRAM; the full `x` vector is staged once into shared WRAM behind a barrier; each tasklet owns whole rows | Multiply-bound: exposes the software-multiply penalty |
 | **RED** `sum(D)` | `pim-kernels/red/` | Tasklets sum slices into WRAM, hit a hardware barrier, tasklet 0 combines 16 partials; host merges one partial per DPU | Exercises both `T_sync` and `T_merge` |
+| **SEARCH** `count(D == 42)` | `pim-kernels/search/` | Tasklets scan their rake of 256 B blocks, count matches, combine after a barrier; host adds one count per DPU | Streaming scan with a tiny output — the strongest PIM shape in the lab |
+| **HIST** 256-bin histogram | `pim-kernels/hist/` | Each tasklet keeps a private 256-bin histogram in WRAM; tasklet 0 folds them into one 256-bin partial per DPU; host merges the partials | Scatter + partial merge; scaling is limited by the merge term |
+| **GEMM** `C = A·B` | `pim-kernels/gemm/` | 100×100 tiles; each tasklet owns rows of C, stages A and B rows through WRAM and accumulates in registers/WRAM | Multiply-heavy CPU counterexample, `2·d³` MACs per DPU |
 
 The kernels are compiled by:
 
@@ -446,6 +465,13 @@ array). Cycles are the maximum across tasklets from `perfcounter_get()`.
 | VA | 4,194,304 | 32 MiB | 12,812,752 | ≈36.6 ms | 0 errors vs CPU |
 | GEMV | 4,194,304 | 16 MiB + 4 KiB × 4 broadcast | 27,362,256 | ≈78.2 ms | 0 errors vs CPU |
 | RED | 4,194,304 | 16 MiB | 5,375,760 | ≈15.4 ms | sum −1,963,502 matches, 0 errors |
+| SEARCH | 4,194,304 | 16 MiB | 6,424,352 | ≈18.4 ms | 16,408 matches, 0 errors |
+| HIST | 4,194,304 | 16 MiB | 10,640,480 | ≈30.4 ms | all 256 bins match, 0 errors |
+| GEMM | 4,000,000 MACs | 0.3 MiB | 27,933,632 | ≈79.8 ms | 0 errors vs CPU triple loop |
+
+GEMM uses 100×100 tiles per DPU, so `d³ = 1,000,000` MACs per DPU — the same
+"1M elements" scale as the streaming kernels. All six bundled demo streams live
+in `pim-simulator/public/runs/` and replay with the bridge offline.
 
 Measured host-side phases for VA: `copy_in` 33.5 MB in **4.37 ms** (≈7.65 GB/s),
 `copy_out` 16 MB in 2.55 ms. GEMV and RED copy-in measured ≈2.2 ms for 16 MiB.
@@ -474,6 +500,125 @@ prediction at the same `P` and `n`, and flags the error.
 
 ---
 
+## Scheduler and Algorithm Lab
+
+These two workspaces are **extensions to the existing dashboard**, not a
+replacement. The Scheduler lives in `src/engine/{tasks,scheduler,memory,benchmark}.ts`
+and the Lab in `src/engine/optimize.ts` plus `src/pages/Lab.tsx`. The simulator,
+the real kernels and the Live page are unchanged.
+
+### Adaptive CPU ⇄ PIM scheduling
+
+`src/engine/tasks.ts` generates a deterministic task mix (same seed → same tasks)
+from five workload shapes plus GEMM. Each task carries its CPU cost and its PIM
+cost as a function of the number of DPUs assigned to it. `scheduler.ts` runs five
+strategies over that same task set:
+
+| Policy | What it does |
+|---|---|
+| **CPU sequential** | Baseline: every task on the CPU, one after another |
+| **Static PIM** | Every task to PIM, contiguous equal share per DPU, no cost model |
+| **FCFS** | Static kind classifier; PIM tasks take the earliest-free DPU, one DPU each |
+| **Round Robin** | Same classifier, PIM tasks dealt cyclically across DPUs |
+| **Adaptive** | Longest tasks first; CPU vs PIM by predicted finish time; each task gets a data-sized number of least-loaded DPUs |
+
+At the default demo configuration — **1,000,000 elements, 8 DPUs, 32 tasks,
+seed 42, resident data** — the model produces:
+
+| Policy | Makespan | Speedup | CPU / PIM tasks | PIM utilisation | Bank conflicts |
+|---|---:|---:|---:|---:|---:|
+| CPU sequential | 0.499 ms | 1.00× | 32 / 0 | — | 0 |
+| Static PIM | 2.882 ms | 0.17× | 0 / 32 | 31.7% | 13 |
+| FCFS | 0.302 ms | 1.65× | 4 / 28 | 83.6% | 14 |
+| Round Robin | 0.370 ms | 1.35× | 4 / 28 | 68.2% | 15 |
+| **Adaptive** | **0.231 ms** | **2.16×** | **13 / 19** | **85.1%** | **2** |
+
+The adaptive scheduler is **23.4 % faster than the best baseline** and 2.16×
+faster than CPU sequential. It sends small RED/GEMV tasks to the CPU because they
+finish sooner there, and spreads the remaining tasks over 1–4 DPUs according to
+their data size (`preferredUnits`), so the Gantt shows genuinely different DPU
+choices per task rather than "all eight every time". Each decision row states the
+arithmetic that produced it: the predicted completion time of the chosen path
+versus the alternative.
+
+Static PIM loses badly because it has no classifier (HIST/GEMM are expensive on
+the DPU) and because the 50 µs kernel launch is amortised over an assumed batch
+of ~25 tasks per DPU (2 µs per task).
+
+### Load balancing
+
+The adaptive policy always places a PIM task on the lanes that will be free
+earliest (ties go to the lane with fewer scheduled tasks) after sorting by
+longest processing time. Round Robin is the static baseline: one large task can
+stall its lane while others go idle. The **Load balancing** view shows per-lane
+bars, max/min utilisation, idle lanes and overloaded lanes for both policies on
+the *same* schedule data, and the Compare view aggregates all five.
+
+### Logical bank allocator
+
+`src/engine/memory.ts` is an explicitly **modelled** allocator. UPMEM's host API
+exposes DPUs (`dpu_alloc`), not physical bank placement, so this layer reasons
+about conflicts and fragmentation rather than programming a real bank map:
+
+- each DPU has 16 logical bank parts of 64 KiB;
+- resident data is live from `t = 0` until its task ends (`dataResident`), so
+  lifetimes overlap heavily;
+- a **conflict** is one pair of distinct tasks sharing a bank over an overlapping
+  lifetime; the conflict time is the overlap duration;
+- **First Fit** packs from bank 0, **Best Fit** fills the tightest bank that
+  still fits, **Bank-aware** avoids sharing a bank with a resident task and then
+  spreads.
+
+On the adaptive schedule above, First Fit and Best Fit both leave 25 task-pair
+conflicts across 94 active banks, while Bank-aware cuts that to **2 conflicts**
+across 109 active banks (at the cost of more internal fragmentation). The Memory
+view renders the bank grid, per-block windows and all three allocator rows side
+by side.
+
+### Algorithm Lab: sequential vs parallel
+
+The **Workloads** view can build and run any subset of the six real kernels,
+back to back, through the bridge. It shows the measured cycle count and host
+phases for each kernel and the sum of measured sequential kernel time. The
+**parallel** column on the same page is the scheduler model packing the same
+kinds of work into the DPU lanes at the same time — there is no hardware on which
+to execute six kernels concurrently, so that number is labelled modelled.
+
+The **Scaling** view sweeps DPU count in the analytical model and overlays the
+saved measured kernel as a diamond marker at its DPU count. Scaling flattens when
+the merge term grows with the number of units (RED, HIST).
+
+### Optimisation
+
+The **Optimisation** view sweeps:
+
+- DPU count for a homogeneous kind, reporting makespan, speedup, utilisation and
+  the CPU/PIM split;
+- chunk size (number of tasks) at the optimal DPU count, exposing the dispatch
+  and merge overhead of making tasks too small;
+- the CPU–PIM crossover curve: the first element count where PIM overtakes the
+  CPU, with and without resident data.
+
+It then compares all five placement strategies at the chosen optimum so the
+partitioning choice and the scheduling choice are visible together.
+
+### Measured vs modelled
+
+| Quantity | Source |
+|---|---|
+| DPU cycles, host phase durations, correctness, per-kernel traffic | **Measured** — real DPU ISA in the UPMEM SDK functional simulator |
+| Scheduling decisions, makespan, lane utilisation, speedup | **Modelled** — deterministic list scheduling over the analytical cost functions |
+| Bank conflicts, active banks, fragmentation | **Modelled** — logical allocator, not hardware bank control |
+| Parallel composition of kernels, DPU/chunk sweeps, crossover, energy | **Modelled** — `simulate()` and `pimTaskCost()` |
+
+The `0 B` copy-in shown by the mockup preset is the **resident-data assumption**
+(the inputs are already in PIM banks), not a missing transfer. The Simulator page
+carries a visible resident-data badge with a one-click cold-data toggle; the
+Scheduler has the same checkbox, and the crossover study shows how charging
+copy-in moves the break-even point.
+
+---
+
 ## Dashboard pages
 
 | Page | Contents |
@@ -483,6 +628,8 @@ prediction at the same `P` and `n`, and flags the error.
 | **Results** | Performance graphs vs data size, roofline, CPU/PIM breakdowns, quick comparison |
 | **PIM internals** | DPU/MRAM/WRAM/DMA/tasklet diagram; formula inspector with symbolic formula, substituted numbers and “why this term exists”; calibration ledger; measured-runs table |
 | **Live DPU** | Kernel/DPU controls, build-and-run, stop/clear, demo and saved-run replay, file upload, phase timeline/table, measured-vs-model table, raw event stream |
+| **Scheduler** | Five policies (CPU, Static PIM, FCFS, Round Robin, Adaptive) with Tasks, Timeline, Load, Memory and Compare views; per-task placement reasons; resident-data toggle |
+| **Algorithm Lab** | Workloads (run six real kernels sequentially), Scaling (DPU sweep + measured marker) and Optimisation (DPU/chunk/crossover sweeps) |
 | **Learn** | Memory wall, memory hierarchy, roofline, PIM taxonomy and glossary |
 | **About** | Scope, contribution, model limitations and references |
 
@@ -505,20 +652,22 @@ ACA_PROJECT/
 │   ├── src/engine/               params · workloads · cpuModel · pimModel
 │   │                             energy · simulate · trace · calibration
 │   │                             sweep · suitability · optimizer · format
+│   │                             tasks · scheduler · memory · benchmark · optimize
 │   ├── src/components/           charts, tables, roofline, architecture view
 │   ├── src/pages/                Simulator · Experiments · Results · Deep
-│   │                             Live · Learn · About
+│   │                             Live · Scheduler · Lab · Learn · About
 │   ├── src/state/                store · hooks · live (SSE + replay)
 │   ├── bridge/server.mjs         zero-dependency SSE bridge to the kernels
-│   ├── public/runs/              bundled demo streams (VA, GEMV, RED @ 4 DPUs)
-│   ├── tests/                    engine.test.ts · trace.test.ts
+│   ├── public/runs/              bundled demo streams (six kernels @ 4 DPUs)
+│   ├── tests/                    engine.test.ts · trace.test.ts · scheduler.test.ts
 │   ├── docs/model-spec.md        model specification
 │   └── notes/                    development notes
 └── pim-kernels/                  real UPMEM DPU programs
     ├── common/                   shared constants, result structs, event emitters
-    ├── va/  gemv/  red/          DPU kernel + host program for each workload
+    ├── va/  gemv/  red/          DPU kernel + host program per workload
+    ├── search/  hist/  gemm/     parallel search, histogram, matrix multiply
     ├── runs/                     replayable measured event streams
-    ├── Makefile                  make va | gemv | red | all | run_*
+    ├── Makefile                  make va | … | gemm | all | run_*
     └── README.md                 kernel-specific build and portability notes
 ```
 
@@ -564,6 +713,9 @@ cd pim-kernels
 make va NR_DPUS=4
 make gemv NR_DPUS=4
 make red NR_DPUS=4
+make search NR_DPUS=4
+make hist NR_DPUS=4
+make gemm NR_DPUS=4
 # or: make all NR_DPUS=16
 ```
 
@@ -579,6 +731,7 @@ make run_va NR_DPUS=4      # build/va_events.jsonl
 PIM_EVENTS=1 ./build/va_host
 ```
 
+The same `run_*` targets exist for `gemv`, `red`, `search`, `hist` and `gemm`.
 Set `PIM_EVENTS=0` to silence the JSON channel.
 
 ### Bridge API
@@ -587,7 +740,7 @@ Set `PIM_EVENTS=0` to silence the JSON channel.
 GET /health                              liveness + kernel/env paths + run count
 GET /api/runs                            list saved .jsonl runs
 GET /api/runs/:name                      fetch one saved run
-GET /api/run?kernel=VA|GEMV|RED&dpus=4   SSE: build, run, stream, save
+GET /api/run?kernel=VA|GEMV|RED|SEARCH|HIST|GEMM&dpus=4   SSE: build, run, stream, save
 ```
 
 The bridge spawns `bash -lc` with:
@@ -606,7 +759,7 @@ disconnects.
 
 ```bash
 cd pim-simulator
-npm test        # 23 tests
+npm test        # 31 tests
 npm run build   # tsc + Vite production build
 ```
 
@@ -617,8 +770,13 @@ npm run build   # tsc + Vite production build
   `T_CPU`/`T_PIM`, that exactly one critical leaf is marked per side, that the
   `max()` winners are consistent, that resident data makes copy-in zero, and
   that GEMV's multiply correction exceeds 1 on UPMEM.
-- **Kernel validation**: all three kernels compare every output against a CPU
-  reference at 4 DPUs and report 0 errors.
+- **8 scheduler/memory tests** pin the 1M-element / 8-DPU / seed-42 demo:
+  determinism, cold-vs-resident copy-in, adaptive beating CPU and every static
+  baseline, every task placed exactly once, varied per-task DPU widths, lane
+  busy time never exceeding the makespan, and bank-aware allocation cutting
+  conflicts while staying inside modelled capacity.
+- **Kernel validation**: all six kernels compare every output against a CPU
+  reference at 4 DPUs and report 0 errors (VA, GEMV, RED, SEARCH, HIST, GEMM).
 - **Calibration validation**: measured cycles and transfer rates are compared
   with model predictions at the same `P` and `n`; errors are shown in the UI.
 
@@ -639,6 +797,12 @@ Known modelling limitations are listed [below](#limitations).
    live to show the real DPU ISA producing the cycle count.
 5. **Experiments — Reduction sweep.** Speedup flattens as units grow because
    every unit's partial must merge through the host.
+6. **Scheduler — Compare.** CPU 1.0×, Static PIM 0.17×, FCFS 1.65×, Round Robin
+   1.35×, Adaptive 2.16×; open **Tasks** for the per-task CPU/PIM reasons, then
+   **Memory** to show Bank-aware cutting 25 conflicts to 2.
+7. **Algorithm Lab — Workloads.** Run SEARCH/HIST/GEMM through the bridge (or
+   replay the bundled streams) and compare the measured sequential time with
+   the modelled parallel packing; **Optimisation** shows the DPU/chunk sweeps.
 
 ---
 
@@ -673,6 +837,14 @@ Known modelling limitations are listed [below](#limitations).
   host wall time includes simulation overhead.
 - The suitability score is fitted on **simulated** configurations, not measured
   hardware traces.
+- The Scheduler and Algorithm Lab are **models on top of the same cost
+  functions**, not a hardware scheduler: the bank allocator is logical (UPMEM
+  exposes DPUs, not physical bank placement), the adaptive policy assumes a
+  deterministic task set and known costs, and "parallel kernel execution" is
+  modelled because the SDK runtime runs one kernel at a time.
+- Sequential-vs-parallel timings from the Lab are labelled measured vs modelled;
+  measured kernel time comes from real DPU perfcounter cycles at 0.35 GHz, not
+  wall-clock time in the functional simulator.
 
 ---
 

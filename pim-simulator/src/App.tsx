@@ -6,12 +6,25 @@ import { Results } from './pages/Results'
 import { Learn } from './pages/Learn'
 import { Deep } from './pages/Deep'
 import { Live } from './pages/Live'
+import { Scheduler } from './pages/Scheduler'
+import { Lab } from './pages/Lab'
 import { About } from './pages/About'
 
-type Page = 'simulator' | 'experiments' | 'results' | 'deep' | 'live' | 'learn' | 'about'
+type Page =
+  | 'simulator'
+  | 'scheduler'
+  | 'lab'
+  | 'experiments'
+  | 'results'
+  | 'deep'
+  | 'live'
+  | 'learn'
+  | 'about'
 
 const NAV: { id: Page; label: string }[] = [
   { id: 'simulator', label: 'Simulator' },
+  { id: 'scheduler', label: 'Scheduler' },
+  { id: 'lab', label: 'Algorithm Lab' },
   { id: 'experiments', label: 'Experiments' },
   { id: 'results', label: 'Results' },
   { id: 'deep', label: 'PIM internals' },
@@ -50,6 +63,8 @@ function Shell() {
       </header>
       <main>
         {page === 'simulator' && <Simulator />}
+        {page === 'scheduler' && <Scheduler />}
+        {page === 'lab' && <Lab />}
         {page === 'experiments' && <Experiments />}
         {page === 'results' && <Results />}
         {page === 'deep' && <Deep />}

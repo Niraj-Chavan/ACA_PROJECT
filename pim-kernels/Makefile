@@ -1,5 +1,6 @@
 # Kernels compiled for the real UPMEM DPU instruction set.
-#   make va   | make gemv   | make red     (or: make all)
+#   make va | make gemv | make red | make search | make hist | make gemm
+#   (or: make all)
 # Requires: source ../../upmem-env.sh first (adds SDK + compatibility libs to PATH)
 #
 # `LIBDPU_PY` lets libdpu.so resolve the interpreter available on modern
@@ -15,7 +16,7 @@ COMMON_FLAGS := -Wall -Wextra -Werror -g -Icommon
 DPU_CFLAGS := ${COMMON_FLAGS} -O2 -DNR_TASKLETS=${NR_TASKLETS}
 HOST_CFLAGS := ${COMMON_FLAGS} -std=c11 -O3 -D_POSIX_C_SOURCE=200112L `dpu-pkg-config --cflags --libs dpu` ${LIBDPU_PY} -DNR_TASKLETS=${NR_TASKLETS}
 
-KERNELS := va gemv red
+KERNELS := va gemv red search hist gemm
 
 TARGETS := $(addprefix ${BUILDDIR}/,$(addsuffix _done,${KERNELS}))
 
@@ -31,6 +32,9 @@ FORCE:
 va: ${BUILDDIR}/va_done
 gemv: ${BUILDDIR}/gemv_done
 red: ${BUILDDIR}/red_done
+search: ${BUILDDIR}/search_done
+hist: ${BUILDDIR}/hist_done
+gemm: ${BUILDDIR}/gemm_done
 
 define KERNEL_template =
 ${BUILDDIR}/$(1)_done: FORCE $(1)/dpu.c $(1)/host.c common/common.h common/host_util.h
@@ -50,6 +54,15 @@ run_gemv: gemv
 
 run_red: red
 	PIM_EVENTS=1 ${BUILDDIR}/red_host 2>${BUILDDIR}/red_events.jsonl
+
+run_search: search
+	PIM_EVENTS=1 ${BUILDDIR}/search_host 2>${BUILDDIR}/search_events.jsonl
+
+run_hist: hist
+	PIM_EVENTS=1 ${BUILDDIR}/hist_host 2>${BUILDDIR}/hist_events.jsonl
+
+run_gemm: gemm
+	PIM_EVENTS=1 ${BUILDDIR}/gemm_host 2>${BUILDDIR}/gemm_events.jsonl
 
 clean:
 	rm -Rf ${BUILDDIR}

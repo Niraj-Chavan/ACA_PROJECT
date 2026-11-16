@@ -1,0 +1,7 @@
+{"event":"phase","name":"alloc_load","ms":3.162,"bytes":0}
+{"event":"meta","kernel":"SEARCH","dpus":4,"tasklets":16,"n":4194304,"ops":8388608}
+{"event":"phase","name":"copy_in","ms":5.126,"bytes":16777216}
+{"event":"phase","name":"launch","ms":538.085,"bytes":0}
+{"event":"phase","name":"copy_out","ms":0.067,"bytes":16}
+{"event":"dpu","cycles":6424352,"dpus":4}
+{"event":"phase","name":"merge","ms":0.000,"bytes":16}

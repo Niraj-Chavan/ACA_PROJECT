@@ -33,4 +33,13 @@ typedef struct {
     dpu_result_t tasklet_result[NR_TASKLETS];
 } dpu_results_t;
 
+/* Histogram kernels ship a 256-bin partial per DPU back to the host. */
+#define HIST_BINS 256
+
+typedef struct {
+    uint32_t cycles;
+    uint32_t bins[HIST_BINS];
+    uint32_t pad; /* keep the struct a multiple of the 8-byte DMA granularity */
+} hist_result_t;
+
 #endif

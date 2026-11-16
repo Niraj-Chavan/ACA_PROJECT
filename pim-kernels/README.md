@@ -37,7 +37,10 @@ common/host_util.h   monotonic timers + JSON event emitters (stderr)
 va/                  vector add   C = A + B          (pure streaming)
 gemv/                matrix–vector y = A·x            (multiply-bound)
 red/                 reduction    sum(D)              (barrier + host merge)
-Makefile             make va | gemv | red | all | run_*
+search/              parallel search count(D == 42)   (streaming scan, tiny result)
+hist/                256-bin histogram                (scatter + partial merge)
+gemm/                matrix multiply C = A·B           (multiply-heavy CPU win)
+Makefile             make va | … | gemm | all | run_*
 runs/                saved event streams for dashboard replay
 ```
 
@@ -47,14 +50,20 @@ runs/                saved event streams for dashboard replay
 source ~/TY_College/ACA/upmem-env.sh
 cd ~/TY_College/ACA/ACA_PROJECT/pim-kernels
 
-make va   NR_DPUS=4 && ./build/va_host
-make gemv NR_DPUS=4 && ./build/gemv_host
-make red  NR_DPUS=4 && ./build/red_host
+make va     NR_DPUS=4 && ./build/va_host
+make gemv   NR_DPUS=4 && ./build/gemv_host
+make red    NR_DPUS=4 && ./build/red_host
+make search NR_DPUS=4 && ./build/search_host
+make hist   NR_DPUS=4 && ./build/hist_host
+make gemm   NR_DPUS=4 && ./build/gemm_host
 
 # same thing, writing the replayable event stream:
 make run_va NR_DPUS=4      # build/va_events.jsonl
 make run_gemv NR_DPUS=4
 make run_red NR_DPUS=4
+make run_search NR_DPUS=4
+make run_hist NR_DPUS=4
+make run_gemm NR_DPUS=4
 
 make clean
 ```
@@ -70,6 +79,9 @@ the problem at 1024×1024 per DPU so the vector fits in shared WRAM.
 | VA | 4,194,304 | 32 MiB | 12,812,752 | 0 errors vs CPU |
 | GEMV | 4,194,304 | 16 MiB + x broadcast | 27,362,256 | 0 errors vs CPU |
 | RED | 4,194,304 | 16 MiB | 5,375,760 | sum = −1,963,502, 0 errors |
+| SEARCH | 4,194,304 | 16 MiB | 6,424,352 | 16,408 matches, 0 errors |
+| HIST | 4,194,304 | 16 MiB | 10,640,480 | all 256 bins match, 0 errors |
+| GEMM | 4,000,000 MACs | 0.3 MiB | 27,933,632 | 0 errors vs CPU triple loop |
 
 Copy-in bandwidth on this machine measured **7.65 GB/s** for VA, **2.2 ms** for
 the 16 MiB RED transfer. The dashboard's calibration ledger back-solves the
@@ -94,6 +106,21 @@ then hits a hardware barrier. Tasklet 0 combines the 16 partials into one
 per-DPU value. The host then sums one 4-byte partial per DPU — the model's
 `T_merge` term, visible as a separate `merge` phase in the event stream.
 
+**SEARCH — parallel search.** Every tasklet scans its rake of 256-byte blocks and
+counts elements equal to 42. Partials are combined behind a barrier, so the host
+receives one count per DPU. This is the strongest PIM shape in the lab: streaming
+reads with a tiny output and almost no host work.
+
+**HIST — 256-bin histogram.** Each tasklet keeps a private 256-bin histogram in
+WRAM (1 KiB each), so increments never cross the DMA boundary. Tasklet 0 folds
+the 16 histograms into one 256-bin partial per DPU; the host merges `P × 256`
+bins — a merge term that grows with the DPU count.
+
+**GEMM — matrix multiply.** 100×100 tiles per DPU, so `d³ = 1,000,000` MACs per
+DPU. Each tasklet owns rows of C, stages A and B rows through WRAM and accumulates
+one C row at a time. This is the CPU counterexample: multiply-heavy work where the
+DPU's software multiply makes the CPU the better engine.
+
 ## Event stream (dashboard input)
 
 With `PIM_EVENTS=1` (the default unless set to `0`), each host prints one JSON
@@ -112,9 +139,9 @@ object per line on **stderr**; all other output stays on stdout:
 workload, which lets the dashboard compare measured and predicted kernel time at
 the same configuration. RED additionally emits `{"event":"phase","name":"merge",...}`.
 
-`runs/` holds the three demo streams (VA, GEMV, RED at 4 DPUs). The dashboard
-copies of these live in `../pim-simulator/public/runs/` so replay works with the
-bridge offline.
+`runs/` holds the six demo streams (VA, GEMV, RED, SEARCH, HIST, GEMM at 4 DPUs).
+The dashboard copies live in `../pim-simulator/public/runs/` so replay works with
+the bridge offline.
 
 ## Portability notes (things that cost time)
 

@@ -17,7 +17,7 @@ import { workloadById } from '../engine/workloads'
  * SSE bridge, or replay a saved run when no bridge is running.
  */
 
-const KERNELS = ['VA', 'GEMV', 'RED']
+const KERNELS = ['VA', 'GEMV', 'RED', 'SEARCH', 'HIST', 'GEMM']
 const DPU_CHOICES = [1, 2, 4, 8, 16]
 
 const PHASE_ORDER: Record<string, number> = {

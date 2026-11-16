@@ -33,6 +33,9 @@ const KERNELS = {
   VA: 'va',
   GEMV: 'gemv',
   RED: 'red',
+  SEARCH: 'search',
+  HIST: 'hist',
+  GEMM: 'gemm',
 }
 
 const CORS = {

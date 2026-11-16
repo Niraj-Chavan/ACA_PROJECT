@@ -197,6 +197,68 @@ export function useLiveRun(): LiveRunApi {
   return { state, start, stop, replay, clear }
 }
 
+/** Run one kernel through the bridge and resolve when the stream is done. */
+export function runOnce(
+  kernel: string,
+  dpus: number,
+  onEvent?: (event: RunEvent) => void,
+  signal?: AbortSignal
+): Promise<RunState> {
+  return new Promise((resolve) => {
+    const events: RunEvent[] = []
+    const es = new EventSource(
+      `${BRIDGE_URL}/api/run?kernel=${encodeURIComponent(kernel)}&dpus=${dpus}`
+    )
+    let finished = false
+    const finish = (error?: string) => {
+      if (finished) return
+      finished = true
+      es.close()
+      const state = reduceRun(events, { source: 'live', running: false })
+      if (error) state.error = error
+      resolve(state)
+    }
+    es.onmessage = (msg) => {
+      try {
+        const event = JSON.parse(msg.data) as RunEvent
+        events.push(event)
+        onEvent?.(event)
+        if (event.event === 'done') finish()
+      } catch {
+        // ignore malformed frame
+      }
+    }
+    es.addEventListener('done', () => finish())
+    es.onerror = () =>
+      finish(
+        events.length
+          ? undefined
+          : `No bridge at ${BRIDGE_URL}. Start it with: node bridge/server.mjs`
+      )
+    signal?.addEventListener('abort', () => {
+      es.close()
+      finish('cancelled')
+    })
+  })
+}
+
+/** Execute kernels back-to-back on the real DPU simulator. */
+export async function runSequential(
+  kernels: string[],
+  dpus: number,
+  onResult?: (kernel: string, state: RunState) => void,
+  signal?: AbortSignal
+): Promise<{ kernel: string; state: RunState }[]> {
+  const out: { kernel: string; state: RunState }[] = []
+  for (const kernel of kernels) {
+    if (signal?.aborted) break
+    const state = await runOnce(kernel, dpus, undefined, signal)
+    out.push({ kernel, state })
+    onResult?.(kernel, state)
+  }
+  return out
+}
+
 /** Fetch the list of saved runs from the bridge (empty when it is offline). */
 export async function fetchSavedRuns(): Promise<string[]> {
   try {
@@ -224,6 +286,9 @@ export const DEMO_RUNS = [
   { name: 'demo:VA-4dpu.jsonl', label: 'VA · 4 DPUs · vector add' },
   { name: 'demo:GEMV-4dpu.jsonl', label: 'GEMV · 4 DPUs · matrix–vector' },
   { name: 'demo:RED-4dpu.jsonl', label: 'RED · 4 DPUs · reduction + merge' },
+  { name: 'demo:SEARCH-4dpu.jsonl', label: 'SEARCH · 4 DPUs · parallel search' },
+  { name: 'demo:HIST-4dpu.jsonl', label: 'HIST · 4 DPUs · histogram + merge' },
+  { name: 'demo:GEMM-4dpu.jsonl', label: 'GEMM · 4 DPUs · matrix multiply' },
 ]
 
 /** Load either a bridge run or a bundled demo run. */

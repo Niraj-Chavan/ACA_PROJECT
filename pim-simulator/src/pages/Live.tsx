@@ -18,6 +18,8 @@ import { workloadById } from '../engine/workloads'
  */
 
 const KERNELS = ['VA', 'GEMV', 'RED', 'SEARCH', 'HIST', 'GEMM']
+// The SEARCH/HIST kernels map onto the SEL/HST analytical workloads.
+const WORKLOAD_FOR_KERNEL: Record<string, string> = { SEARCH: 'SEL', HIST: 'HST' }
 const DPU_CHOICES = [1, 2, 4, 8, 16]
 
 const PHASE_ORDER: Record<string, number> = {
@@ -118,7 +120,7 @@ export function Live() {  const { state } = useStore()
             <select value={kernel} onChange={(e) => setKernel(e.target.value)}>
               {KERNELS.map((k) => (
                 <option key={k} value={k}>
-                  {k} — {workloadById(k).short}
+                  {k} — {workloadById(WORKLOAD_FOR_KERNEL[k] ?? k).short}
                 </option>
               ))}
             </select>
@@ -337,7 +339,7 @@ export function Live() {  const { state } = useStore()
           <h3>No run loaded</h3>
           <p>
             Pick a kernel and press <strong>Build &amp; run</strong> to execute it on the DPUs, or
-            load a saved stream. The three demo runs (VA, GEMV, RED at 4 DPUs) are bundled in{' '}
+            load a saved stream. All six demo runs (at 4 DPUs) are bundled in{' '}
             <code>public/runs/</code>, so replay works even with the bridge offline.
           </p>
           <p className="fineprint">

@@ -7,8 +7,9 @@ dist/
 build/
 pim-kernels/build/
 
-# Local run scratch (demo run streams in pim-kernels/runs/ are kept)
+# Local run scratch (curated 000N-* demo streams in pim-kernels/runs/ are kept)
 pim-kernels/events.jsonl
+pim-kernels/runs/[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-*.jsonl
 *.log
 
 # Browser tooling artifacts
